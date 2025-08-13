@@ -21,6 +21,7 @@ import { toast } from "react-toastify";
 import Navbar from "../components/Navbar.jsx";
 import mlApi from "../lib/mlApi.js";
 
+// Checklist items
 const checklistItems = [
   "File must be in CSV format (.csv)",
   "Must contains at least 50 rows",
@@ -38,14 +39,35 @@ const checklistItems = [
 - NumComplaints`,
 ];
 
+// Build minimal derived series when API returns only { predictions: [...] }
+function withDerivedSeries(payload) {
+  if (!payload) return null;
+
+  // If server already returned pieData, keep it.
+  if (!payload.pieData && Array.isArray(payload.predictions)) {
+    const churned = payload.predictions.filter(
+      (p) => Number(p.churn_pred) === 1
+    ).length;
+    const retained = payload.predictions.length - churned;
+    payload = {
+      ...payload,
+      pieData: [
+        { name: "Retained", value: retained },
+        { name: "Churned", value: churned },
+      ],
+    };
+  }
+  return payload;
+}
+
 function Results() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [checked, setChecked] = useState(
     new Array(checklistItems.length).fill(false)
   );
-  const allChecked = checked.every(Boolean);
   const navigate = useNavigate();
+  const allChecked = checked.every(Boolean);
 
   const handleCheck = (index) => {
     const next = [...checked];
@@ -53,46 +75,40 @@ function Results() {
     setChecked(next);
   };
 
-  // In dev, call /auth/login once so Flask sets the cookie
-  const ensureSession = async () => {
-    try {
-      if (import.meta.env.DEV) {
-        await mlApi.post("/auth/login");
-      }
-      return true;
-    } catch {
-      toast.error("Could not establish session.");
-      return false;
-    }
-  };
-
   useEffect(() => {
     const fetchLatestResults = async () => {
       setLoading(true);
       try {
-        if (!(await ensureSession())) return;
-
-        // Cookie-based: no token header, but we must send credentials
+        // No cookies to ML API (Option A): do NOT include withCredentials
         const res = await mlApi.get("/results/latest", {
           withCredentials: false,
         });
 
-        if (!res.data?.success)
-          throw new Error(res.data?.error || "Failed to load results");
+        // Expected shapes:
+        // { success: true, data: {...} }  OR just { success: true, ... }
+        const payload = res.data?.data ?? res.data;
 
-        // Expecting the server to return the prebuilt series like pieData, tenureChart, etc.
-        // If your server returns just { predictions: [...] }, see the note below.
-        const payload = res.data.data || res.data.result_json || res.data;
-        setData(payload);
-      } catch (error) {
-        console.error("Latest results error:", error);
-        toast.error(
-          error.response?.data?.error ||
-            error.response?.data?.message ||
-            error.message ||
-            "Failed to load results"
-        );
-        setData(null);
+        if (!res.data?.success || !payload) {
+          // Treat as "no results"
+          setData(null);
+        } else {
+          setData(withDerivedSeries(payload));
+        }
+      } catch (err) {
+        const status = err?.response?.status;
+        if (status === 404) {
+          // Your API returns 404 when no results exist yet
+          setData(null);
+        } else {
+          console.error("Latest results error:", err);
+          toast.error(
+            err?.response?.data?.error ||
+              err?.response?.data?.message ||
+              err?.message ||
+              "Failed to load results"
+          );
+          setData(null);
+        }
       } finally {
         setLoading(false);
       }
@@ -103,10 +119,9 @@ function Results() {
 
   const handleDownload = async () => {
     try {
-      if (!(await ensureSession())) return;
-      // Only works if you implement /results/download on the API
+      // Only works if you have /results/download implemented on ML API
       const url = `${mlApi.defaults.baseURL}/results/download`;
-      const response = await fetch(url, { credentials: "include" });
+      const response = await fetch(url, { credentials: "omit" }); // no cookies
       if (!response.ok) throw new Error("Download failed");
 
       const blob = await response.blob();
@@ -122,13 +137,34 @@ function Results() {
       toast.success("CSV downloaded successfully!");
     } catch (error) {
       console.error("Download error:", error);
-      toast.error("Download failed.");
+      toast.error("Download failed (endpoint missing?).");
     }
   };
 
   if (loading) return <p className="text-center mt-10">Loading results...</p>;
+
+  // No results yet (first time after deploy or server restart)
   if (!data)
-    return <p className="text-center mt-10 text-red-500">No results found</p>;
+    return (
+      <>
+        <Navbar />
+        <div className="min-h-screen p-8 bg-gradient-to-br from-gray-100 to-pink-100">
+          <h1 className="text-3xl font-bold text-center text-rose-500 mb-6">
+            ML Prediction Results
+          </h1>
+          <p className="text-center mt-10 text-gray-700">
+            No results found yet. Please upload a CSV on the{" "}
+            <button
+              onClick={() => navigate("/upload")}
+              className="underline text-rose-500 hover:text-rose-600"
+            >
+              Upload
+            </button>{" "}
+            page and run a prediction.
+          </p>
+        </div>
+      </>
+    );
 
   return (
     <>
@@ -139,203 +175,225 @@ function Results() {
         </h1>
 
         <div className="grid md:grid-cols-2 gap-6">
-          {/* Pie: Churn vs Retain */}
-          <div className="bg-white rounded-2xl p-6 shadow flex flex-col items-center justify-center">
-            <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
-              Churn vs Retain
-            </h2>
-            <ResponsiveContainer width={300} height={300}>
-              <PieChart>
-                <Pie
-                  dataKey="value"
-                  data={data.pieData}
-                  cx="50%"
-                  cy="50%"
-                  outerRadius={110}
-                  label
-                >
-                  {data.pieData?.map((_, i) => (
-                    <Cell
-                      key={`cell-${i}`}
-                      fill={["#fda4af", "#f43f5e"][i % 2]}
-                    />
-                  ))}
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
+          {/* Pie: Churn vs Retain — derived from predictions if needed */}
+          {Array.isArray(data.pieData) && (
+            <div className="bg-white rounded-2xl p-6 shadow flex flex-col items-center justify-center">
+              <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
+                Churn vs Retain
+              </h2>
+              <ResponsiveContainer width={300} height={300}>
+                <PieChart>
+                  <Pie
+                    dataKey="value"
+                    data={data.pieData}
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={110}
+                    label
+                  >
+                    {data.pieData.map((_, i) => (
+                      <Cell
+                        key={`cell-${i}`}
+                        fill={["#fda4af", "#f43f5e"][i % 2]}
+                      />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          )}
 
-          {/* Tenure Bar */}
-          <div className="bg-white rounded-2xl p-6 shadow">
-            <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
-              Customer Tenure vs Churn
-            </h2>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={data.tenureChart}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="tenure" />
-                <YAxis />
-                <Tooltip />
-                <Legend />
-                <Bar dataKey="churned" fill="#f43f5e" name="Churned" />
-                <Bar dataKey="retained" fill="#fda4af" name="Retained" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+          {/* Tenure Bar — render only if API provided the series */}
+          {Array.isArray(data.tenureChart) && (
+            <div className="bg-white rounded-2xl p-6 shadow">
+              <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
+                Customer Tenure vs Churn
+              </h2>
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={data.tenureChart}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="tenure" />
+                  <YAxis />
+                  <Tooltip />
+                  <Legend />
+                  <Bar dataKey="churned" fill="#f43f5e" name="Churned" />
+                  <Bar dataKey="retained" fill="#fda4af" name="Retained" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
 
           {/* Complaints Line */}
-          <div className="bg-white rounded-2xl p-6 shadow">
-            <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
-              Complaints vs Churn
-            </h2>
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={data.complaintsLineChart}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="complaints" />
-                <YAxis />
-                <Tooltip />
-                <Legend />
-                <Line
-                  type="monotone"
-                  dataKey="churned"
-                  stroke="#f43f5e"
-                  name="Churned"
-                  strokeWidth={2}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="retained"
-                  stroke="#fda4af"
-                  name="Retained"
-                  strokeWidth={2}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
+          {Array.isArray(data.complaintsLineChart) && (
+            <div className="bg-white rounded-2xl p-6 shadow">
+              <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
+                Complaints vs Churn
+              </h2>
+              <ResponsiveContainer width="100%" height={300}>
+                <LineChart data={data.complaintsLineChart}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="complaints" />
+                  <YAxis />
+                  <Tooltip />
+                  <Legend />
+                  <Line
+                    type="monotone"
+                    dataKey="churned"
+                    stroke="#f43f5e"
+                    name="Churned"
+                    strokeWidth={2}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="retained"
+                    stroke="#fda4af"
+                    name="Retained"
+                    strokeWidth={2}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
 
           {/* Balance Area */}
-          <div className="bg-white rounded-2xl p-6 shadow">
-            <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
-              Balance vs Churn/Retain
-            </h2>
-            <ResponsiveContainer width="100%" height={300}>
-              <AreaChart
-                data={data.balanceAreaChart}
-                margin={{ top: 10, right: 30, left: 0, bottom: 0 }}
-              >
-                <defs>
-                  <linearGradient id="colorRetain" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#fbcfe8" stopOpacity={0.8} />
-                    <stop offset="95%" stopColor="#fbcfe8" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="colorChurn" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.8} />
-                    <stop offset="95%" stopColor="#f43f5e" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <XAxis dataKey="balance" tick={{ fontSize: 10 }} />
-                <YAxis />
-                <Tooltip />
-                <Area
-                  type="monotone"
-                  dataKey="retained"
-                  stroke="#fbcfe8"
-                  fill="url(#colorRetain)"
-                  name="Retained"
-                />
-                <Area
-                  type="monotone"
-                  dataKey="churned"
-                  stroke="#f43f5e"
-                  fill="url(#colorChurn)"
-                  name="Churned"
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
+          {Array.isArray(data.balanceAreaChart) && (
+            <div className="bg-white rounded-2xl p-6 shadow">
+              <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
+                Balance vs Churn/Retain
+              </h2>
+              <ResponsiveContainer width="100%" height={300}>
+                <AreaChart
+                  data={data.balanceAreaChart}
+                  margin={{ top: 10, right: 30, left: 0, bottom: 0 }}
+                >
+                  <defs>
+                    <linearGradient
+                      id="colorRetain"
+                      x1="0"
+                      y1="0"
+                      x2="0"
+                      y2="1"
+                    >
+                      <stop offset="5%" stopColor="#fbcfe8" stopOpacity={0.8} />
+                      <stop offset="95%" stopColor="#fbcfe8" stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="colorChurn" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.8} />
+                      <stop offset="95%" stopColor="#f43f5e" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <XAxis dataKey="balance" tick={{ fontSize: 10 }} />
+                  <YAxis />
+                  <Tooltip />
+                  <Area
+                    type="monotone"
+                    dataKey="retained"
+                    stroke="#fbcfe8"
+                    fill="url(#colorRetain)"
+                    name="Retained"
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="churned"
+                    stroke="#f43f5e"
+                    fill="url(#colorChurn)"
+                    name="Churned"
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          )}
 
           {/* Credit Score Trend */}
-          <div className="bg-white rounded-2xl p-6 shadow md:col-span-2">
-            <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
-              Credit Score Trends
-            </h2>
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={data.creditScoreChart}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="credit_score" />
-                <YAxis />
-                <Tooltip />
-                <Legend />
-                <Line
-                  type="monotone"
-                  dataKey="churned"
-                  stroke="#f43f5e"
-                  name="Churned"
-                  strokeWidth={2}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="retained"
-                  stroke="#fda4af"
-                  name="Retained"
-                  strokeWidth={2}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
+          {Array.isArray(data.creditScoreChart) && (
+            <div className="bg-white rounded-2xl p-6 shadow md:col-span-2">
+              <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
+                Credit Score Trends
+              </h2>
+              <ResponsiveContainer width="100%" height={300}>
+                <LineChart data={data.creditScoreChart}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="credit_score" />
+                  <YAxis />
+                  <Tooltip />
+                  <Legend />
+                  <Line
+                    type="monotone"
+                    dataKey="churned"
+                    stroke="#f43f5e"
+                    name="Churned"
+                    strokeWidth={2}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="retained"
+                    stroke="#fda4af"
+                    name="Retained"
+                    strokeWidth={2}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
 
           {/* Income Band */}
-          <div className="bg-white rounded-2xl p-6 shadow">
-            <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
-              Income Band vs Churn
-            </h2>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart
-                data={[...(data.incomeBandChart || [])].sort((a, b) => {
-                  const order = [
-                    "Very Low",
-                    "Low",
-                    "Medium",
-                    "High",
-                    "Very High",
-                  ];
-                  return order.indexOf(a.band) - order.indexOf(b.band);
-                })}
-              >
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="band" />
-                <YAxis />
-                <Tooltip />
-                <Legend />
-                <Bar dataKey="retained" fill="#fda4af" />
-                <Bar dataKey="churned" fill="#f43f5e" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+          {Array.isArray(data.incomeBandChart) && (
+            <div className="bg-white rounded-2xl p-6 shadow">
+              <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
+                Income Band vs Churn
+              </h2>
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart
+                  data={[...(data.incomeBandChart || [])].sort((a, b) => {
+                    const order = [
+                      "Very Low",
+                      "Low",
+                      "Medium",
+                      "High",
+                      "Very High",
+                    ];
+                    return order.indexOf(a.band) - order.indexOf(b.band);
+                  })}
+                >
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="band" />
+                  <YAxis />
+                  <Tooltip />
+                  <Legend />
+                  <Bar dataKey="retained" fill="#fda4af" />
+                  <Bar dataKey="churned" fill="#f43f5e" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
 
           {/* Avg Credit Score */}
-          <div className="bg-white rounded-2xl p-6 shadow">
-            <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
-              Average Credit Score by Churn
-            </h2>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={data.avgCreditScoreByChurn}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="label" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="avg_score">
-                  {data.avgCreditScoreByChurn?.map((entry, index) => (
-                    <Cell
-                      key={`cell-${index}`}
-                      fill={entry.label === "Retained" ? "#fda4af" : "#f43f5e"}
-                    />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+          {Array.isArray(data.avgCreditScoreByChurn) && (
+            <div className="bg-white rounded-2xl p-6 shadow">
+              <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
+                Average Credit Score by Churn
+              </h2>
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={data.avgCreditScoreByChurn}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="label" />
+                  <YAxis />
+                  <Tooltip />
+                  <Bar dataKey="avg_score">
+                    {data.avgCreditScoreByChurn.map((entry, index) => (
+                      <Cell
+                        key={`cell-${index}`}
+                        fill={
+                          entry.label === "Retained" ? "#fda4af" : "#f43f5e"
+                        }
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
         </div>
 
         {/* Checklist */}
