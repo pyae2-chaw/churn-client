@@ -1,12 +1,10 @@
-import React, { useContext, useRef, useState } from "react";
-import { AppContext } from "../context/AppContext.jsx";
+import React, { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
-import axios from "axios";
 import Navbar from "../components/Navbar.jsx";
+import mlApi from "..src/lib/mlApi";
 
 function Upload() {
-  const { mlApiUrl } = useContext(AppContext);
   const navigate = useNavigate();
 
   const [file, setFile] = useState(null);
@@ -16,7 +14,8 @@ function Upload() {
 
   const handleFileChange = (e) => {
     const selectedFile = e.target.files[0];
-    if (selectedFile?.type === "text/csv") {
+    // Some browsers set CSV mime weirdly, so rely on file name
+    if (selectedFile && selectedFile.name.toLowerCase().endsWith(".csv")) {
       setFile(selectedFile);
     } else {
       toast.error("Only CSV files are allowed.");
@@ -29,23 +28,25 @@ function Upload() {
 
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("user_id", localStorage.getItem("user_id") || "anonymous"); // ✅ send user_id in form data
+    formData.append("user_id", localStorage.getItem("user_id") || "anonymous");
 
     try {
       setUploading(true);
 
-      const { data } = await axios.post(`${mlApiUrl}/predict`, formData, {
+      const { data } = await mlApi.post("/predict", formData, {
         headers: { "Content-Type": "multipart/form-data" },
         onUploadProgress: (e) => {
+          if (!e.total) return;
           const percent = Math.round((e.loaded * 100) / e.total);
           setProgress(percent);
         },
-        withCredentials: true,
       });
 
-      if (data.status === "success") {
+      if (data?.status === "success") {
         toast.success("File uploaded successfully!");
         navigate("/results");
+      } else {
+        toast.error(data?.message || "Upload failed.");
       }
     } catch (error) {
       console.error("Upload error:", error);
@@ -63,18 +64,23 @@ function Upload() {
         <h1 className="text-3xl font-bold text-rose-400 mb-6">
           📤 Upload Your CSV File
         </h1>
+
         <div
           className="border-2 border-dashed border-rose-300 rounded-2xl p-10 bg-white/90 shadow-xl cursor-pointer max-w-2xl mx-auto"
-          onClick={() => fileInputRef.current.click()}
+          onClick={() => fileInputRef.current?.click()}
         >
           <p className="text-gray-600 mb-4">
             Drag & drop your CSV here or click to select
           </p>
+
           {file && (
             <div className="flex flex-col items-center gap-2">
               <p className="font-medium text-gray-800">{file.name}</p>
               <button
-                onClick={() => setFile(null)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setFile(null);
+                }}
                 className="text-sm text-rose-500 hover:underline"
               >
                 ❌ Delete File
@@ -84,7 +90,7 @@ function Upload() {
 
           <input
             type="file"
-            accept=".csv"
+            accept=".csv,text/csv"
             ref={fileInputRef}
             onChange={handleFileChange}
             className="hidden"
@@ -98,7 +104,7 @@ function Upload() {
               <div
                 className="bg-rose-400 h-4 rounded-full transition-all"
                 style={{ width: `${progress}%` }}
-              ></div>
+              />
             </div>
           </div>
         )}
@@ -114,6 +120,7 @@ function Upload() {
         >
           {uploading ? "Uploading..." : "Submit File"}
         </button>
+
         <div className="mt-6">
           <button
             onClick={() => navigate("/")}

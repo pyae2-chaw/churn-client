@@ -18,8 +18,8 @@ import {
 } from "recharts";
 import { useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
-import axios from "axios";
 import Navbar from "../components/Navbar";
+import mlApi from "..src/lib/mlApi";
 
 const checklistItems = [
   "File must be in CSV format (.csv)",
@@ -54,25 +54,32 @@ function Results() {
     new Array(checklistItems.length).fill(false)
   );
   const allChecked = checked.every((item) => item === true);
+
   const handleCheck = (index) => {
-    const newChecked = [...checked];
-    newChecked[index] = !newChecked[index];
-    setChecked(newChecked);
+    const next = [...checked];
+    next[index] = !next[index];
+    setChecked(next);
   };
-  const user_id = localStorage.getItem("user_id") || "anonymous";
 
   const navigate = useNavigate();
+
   useEffect(() => {
     const fetchLatestResults = async () => {
+      setLoading(true);
       try {
         const user_id = localStorage.getItem("user_id") || "anonymous";
-        const res = await axios.get(
-          `http://localhost:5000/results/latest?user_id=${user_id}`
-        );
+        const res = await mlApi.get("/results/latest", { params: { user_id } });
         setData(res.data);
-        setLoading(false);
       } catch (error) {
-        toast.error("Failed to load results");
+        console.error("Latest results error:", error);
+        const msg =
+          error.response?.data?.error ||
+          error.response?.data?.message ||
+          error.message ||
+          "Failed to load results";
+        toast.error(msg);
+        setData(null);
+      } finally {
         setLoading(false);
       }
     };
@@ -83,25 +90,30 @@ function Results() {
   const handleDownload = async () => {
     try {
       const user_id = localStorage.getItem("user_id") || "anonymous";
-      const response = await axios.get(
-        `http://localhost:5000/results/download?user_id=${user_id}`,
-        { responseType: "blob" }
-      );
+      // Build a direct download URL from the mlApi baseURL
+      const url = `${
+        mlApi.defaults.baseURL
+      }/results/download?user_id=${encodeURIComponent(user_id)}`;
+      const response = await fetch(url, { method: "GET" });
+      if (!response.ok) throw new Error("Download failed");
 
-      const blob = new Blob([response.data], { type: "text/csv" });
-      const url = window.URL.createObjectURL(blob);
-
+      const blob = await response.blob();
+      const dlUrl = window.URL.createObjectURL(blob);
       const link = document.createElement("a");
-      link.href = url;
-      link.setAttribute("download", data.csv_url || "churn_results.csv");
+      link.href = dlUrl;
+      link.setAttribute(
+        "download",
+        (data && data.csv_url) || "churn_results.csv"
+      );
       document.body.appendChild(link);
       link.click();
       link.remove();
+      window.URL.revokeObjectURL(dlUrl);
 
       toast.success("CSV downloaded successfully!");
     } catch (error) {
-      toast.error("Download failed.");
       console.error("Download error:", error);
+      toast.error("Download failed.");
     }
   };
 
@@ -136,7 +148,7 @@ function Results() {
                   {data.pieData.map((entry, index) => (
                     <Cell
                       key={`cell-${index}`}
-                      fill={["#fda4af", "#f43f5e"][index % 2]} // rose-500 and rose-300
+                      fill={["#fda4af", "#f43f5e"][index % 2]}
                     />
                   ))}
                 </Pie>
@@ -157,10 +169,8 @@ function Results() {
                 <YAxis />
                 <Tooltip />
                 <Legend />
-                <Bar dataKey="churned" fill="#f43f5e" name="Churned" />{" "}
-                {/* rose-500 */}
-                <Bar dataKey="retained" fill="#fda4af" name="Retained" />{" "}
-                {/* rose-200 */}
+                <Bar dataKey="churned" fill="#f43f5e" name="Churned" />
+                <Bar dataKey="retained" fill="#fda4af" name="Retained" />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -214,13 +224,11 @@ function Results() {
                       x2="0"
                       y2="1"
                     >
-                      <stop offset="5%" stopColor="#fbcfe8" stopOpacity={0.8} />{" "}
-                      {/* rose-200 */}
+                      <stop offset="5%" stopColor="#fbcfe8" stopOpacity={0.8} />
                       <stop offset="95%" stopColor="#fbcfe8" stopOpacity={0} />
                     </linearGradient>
                     <linearGradient id="colorChurn" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.8} />{" "}
-                      {/* rose-500 */}
+                      <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.8} />
                       <stop offset="95%" stopColor="#f43f5e" stopOpacity={0} />
                     </linearGradient>
                   </defs>
@@ -261,14 +269,14 @@ function Results() {
                 <Line
                   type="monotone"
                   dataKey="churned"
-                  stroke="#f43f5e" // rose-500
+                  stroke="#f43f5e"
                   name="Churned"
                   strokeWidth={2}
                 />
                 <Line
                   type="monotone"
                   dataKey="retained"
-                  stroke="#fda4af" // slate-500
+                  stroke="#fda4af"
                   name="Retained"
                   strokeWidth={2}
                 />
