@@ -74,7 +74,7 @@ function Results() {
 
         // Cookie-based: no token header, but we must send credentials
         const res = await mlApi.get("/results/latest", {
-          withCredentials: true,
+          withCredentials: false,
         });
 
         if (!res.data?.success)

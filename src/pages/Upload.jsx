@@ -50,7 +50,7 @@ function Upload() {
 
       const { data } = await mlApi.post(`/predict`, fd, {
         headers: { "Content-Type": "multipart/form-data" },
-        withCredentials: true, // critical for cookies
+        withCredentials: false, // critical for cookies
         onUploadProgress: (e) => {
           if (e.total) setProgress(Math.round((e.loaded * 100) / e.total));
         },
