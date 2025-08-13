@@ -21,6 +21,7 @@ import { toast } from "react-toastify";
 import Navbar from "../components/Navbar.jsx";
 import mlApi from "../lib/mlApi.js";
 
+// Checklist items
 const checklistItems = [
   "File must be in CSV format (.csv)",
   "Must contains at least 50 rows",
@@ -38,37 +39,25 @@ const checklistItems = [
 - NumComplaints`,
 ];
 
-// Enrich payload with derived series + numeric summary
-function enrich(payload) {
+// Build minimal derived series when API returns only { predictions: [...] }
+function withDerivedSeries(payload) {
   if (!payload) return null;
-  const preds = Array.isArray(payload.predictions) ? payload.predictions : [];
 
-  const churned = preds.filter((p) => Number(p.churn_pred) === 1).length;
-  const total = preds.length;
-  const retained = total - churned;
-  const churnRate = total ? Number(((churned / total) * 100).toFixed(1)) : 0;
-
-  const pieData =
-    payload.pieData && Array.isArray(payload.pieData)
-      ? payload.pieData
-      : [
-          { name: "Retained", value: retained },
-          { name: "Churned", value: churned },
-        ];
-
-  // Small preview table (first 10)
-  const preview = preds.slice(0, 10).map((r) => ({
-    id: r.index ?? r.id ?? 0,
-    prediction: Number(r.churn_pred),
-    probability: r.prob != null ? Number(r.prob) : null,
-  }));
-
-  return {
-    ...payload,
-    pieData,
-    summary: { total, churned, retained, churnRate },
-    preview,
-  };
+  // If server already returned pieData, keep it.
+  if (!payload.pieData && Array.isArray(payload.predictions)) {
+    const churned = payload.predictions.filter(
+      (p) => Number(p.churn_pred) === 1
+    ).length;
+    const retained = payload.predictions.length - churned;
+    payload = {
+      ...payload,
+      pieData: [
+        { name: "Retained", value: retained },
+        { name: "Churned", value: churned },
+      ],
+    };
+  }
+  return payload;
 }
 
 function Results() {
@@ -90,22 +79,25 @@ function Results() {
     const fetchLatestResults = async () => {
       setLoading(true);
       try {
-        // No cookies for ML API (Option A)
+        // No cookies to ML API (Option A): do NOT include withCredentials
         const res = await mlApi.get("/results/latest", {
           withCredentials: false,
         });
 
-        // API can be either {success:true, data:{...}} or {success:true, ...}
+        // Expected shapes:
+        // { success: true, data: {...} }  OR just { success: true, ... }
         const payload = res.data?.data ?? res.data;
+
         if (!res.data?.success || !payload) {
+          // Treat as "no results"
           setData(null);
         } else {
-          setData(enrich(payload));
+          setData(withDerivedSeries(payload));
         }
       } catch (err) {
         const status = err?.response?.status;
         if (status === 404) {
-          // no results yet
+          // Your API returns 404 when no results exist yet
           setData(null);
         } else {
           console.error("Latest results error:", err);
@@ -127,8 +119,9 @@ function Results() {
 
   const handleDownload = async () => {
     try {
+      // Only works if you have /results/download implemented on ML API
       const url = `${mlApi.defaults.baseURL}/results/download`;
-      const response = await fetch(url, { credentials: "omit" });
+      const response = await fetch(url, { credentials: "omit" }); // no cookies
       if (!response.ok) throw new Error("Download failed");
 
       const blob = await response.blob();
@@ -140,6 +133,7 @@ function Results() {
       link.click();
       link.remove();
       window.URL.revokeObjectURL(dlUrl);
+
       toast.success("CSV downloaded successfully!");
     } catch (error) {
       console.error("Download error:", error);
@@ -149,6 +143,7 @@ function Results() {
 
   if (loading) return <p className="text-center mt-10">Loading results...</p>;
 
+  // No results yet (first time after deploy or server restart)
   if (!data)
     return (
       <>
@@ -171,35 +166,16 @@ function Results() {
       </>
     );
 
-  const { summary } = data;
-
   return (
     <>
       <Navbar />
       <div className="min-h-screen p-8 bg-gradient-to-br from-gray-100 to-pink-100">
-        <h1 className="text-3xl font-bold text-center text-rose-500 mb-4">
+        <h1 className="text-3xl font-bold text-center text-rose-500 mb-6">
           ML Prediction Results
         </h1>
 
-        {/* Numeric summary chips */}
-        <div className="flex flex-wrap items-center justify-center gap-3 mb-6">
-          <div className="px-4 py-2 rounded-full bg-white shadow text-gray-700">
-            Total: <span className="font-semibold">{summary.total}</span>
-          </div>
-          <div className="px-4 py-2 rounded-full bg-white shadow text-rose-600">
-            Churned: <span className="font-semibold">{summary.churned}</span>
-          </div>
-          <div className="px-4 py-2 rounded-full bg-white shadow text-rose-400">
-            Retained: <span className="font-semibold">{summary.retained}</span>
-          </div>
-          <div className="px-4 py-2 rounded-full bg-white shadow text-gray-700">
-            Churn rate:{" "}
-            <span className="font-semibold">{summary.churnRate}%</span>
-          </div>
-        </div>
-
         <div className="grid md:grid-cols-2 gap-6">
-          {/* Pie: Churn vs Retain */}
+          {/* Pie: Churn vs Retain — derived from predictions if needed */}
           {Array.isArray(data.pieData) && (
             <div className="bg-white rounded-2xl p-6 shadow flex flex-col items-center justify-center">
               <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
@@ -213,7 +189,7 @@ function Results() {
                     cx="50%"
                     cy="50%"
                     outerRadius={110}
-                    label={({ name, value }) => `${name}: ${value}`}
+                    label
                   >
                     {data.pieData.map((_, i) => (
                       <Cell
@@ -222,14 +198,13 @@ function Results() {
                       />
                     ))}
                   </Pie>
-                  <Tooltip formatter={(v) => [v, "Count"]} />
-                  <Legend />
+                  <Tooltip />
                 </PieChart>
               </ResponsiveContainer>
             </div>
           )}
 
-          {/* Tenure Bar */}
+          {/* Tenure Bar — render only if API provided the series */}
           {Array.isArray(data.tenureChart) && (
             <div className="bg-white rounded-2xl p-6 shadow">
               <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
@@ -355,6 +330,7 @@ function Results() {
                     dataKey="retained"
                     stroke="#fda4af"
                     name="Retained"
+                    strokeWidth={2}
                   />
                 </LineChart>
               </ResponsiveContainer>
@@ -420,43 +396,6 @@ function Results() {
           )}
         </div>
 
-        {/* Predictions preview table */}
-        {Array.isArray(data.preview) && data.preview.length > 0 && (
-          <div className="mt-8 bg-white rounded-2xl shadow p-6 overflow-x-auto">
-            <h2 className="font-semibold text-lg mb-4 text-rose-500">
-              Predictions Preview (first 10 rows)
-            </h2>
-            <table className="min-w-full text-sm">
-              <thead className="text-left text-gray-600">
-                <tr>
-                  <th className="py-2 pr-6">Index</th>
-                  <th className="py-2 pr-6">Prediction</th>
-                  <th className="py-2 pr-6">Probability</th>
-                </tr>
-              </thead>
-              <tbody className="text-gray-800">
-                {data.preview.map((row, i) => (
-                  <tr key={i} className="border-t">
-                    <td className="py-2 pr-6">{row.id}</td>
-                    <td className="py-2 pr-6">
-                      {row.prediction === 1 ? (
-                        <span className="text-rose-600 font-medium">Churn</span>
-                      ) : (
-                        <span className="text-gray-700">Retain</span>
-                      )}
-                    </td>
-                    <td className="py-2 pr-6">
-                      {row.prob != null
-                        ? `${(row.probability * 100).toFixed(1)}%`
-                        : "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
         {/* Checklist */}
         <div className="max-w-4xl mx-auto mt-12 bg-white/90 rounded-2xl shadow-md p-6">
           <h2 className="text-xl font-semibold text-rose-400 mb-3 text-center">
@@ -498,7 +437,7 @@ function Results() {
               Go to Home
             </button>
             <button
-              onClick={() => navigate("/upload")}
+              onClick={() => allChecked && navigate("/upload")}
               disabled={!allChecked}
               className={`${
                 allChecked
