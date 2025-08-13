@@ -2,7 +2,7 @@ import React, { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
 import Navbar from "../components/Navbar.jsx";
-import mlApi from "../lib/mlapi.js";
+import mlpi from "../lib/mlapi.js";
 
 const MAX_SIZE_MB = 15;
 
