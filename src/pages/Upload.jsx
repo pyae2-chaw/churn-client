@@ -2,7 +2,7 @@ import React, { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
 import Navbar from "../components/Navbar.jsx";
-import mlApi from "..src/lib/mlApi";
+import mlApi from "..src/lib/mlApi.jsx";
 
 function Upload() {
   const navigate = useNavigate();
