@@ -2,7 +2,7 @@ import React, { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
 import Navbar from "../components/Navbar.jsx";
-import mlApi from "./lib/mlApi.jsx";
+import mlApi from "../lib/mlApi.js";
 
 function Upload() {
   const navigate = useNavigate();
@@ -13,8 +13,7 @@ function Upload() {
   const fileInputRef = useRef(null);
 
   const handleFileChange = (e) => {
-    const selectedFile = e.target.files[0];
-    // Some browsers set CSV mime weirdly, so rely on file name
+    const selectedFile = e.target.files?.[0];
     if (selectedFile && selectedFile.name.toLowerCase().endsWith(".csv")) {
       setFile(selectedFile);
     } else {
@@ -26,31 +25,50 @@ function Upload() {
   const handleUpload = async () => {
     if (!file) return;
 
+    const token = localStorage.getItem("token"); // JWT from your login
+    const userId = localStorage.getItem("user_id") || "anonymous";
+    if (!token) {
+      toast.error("Please log in first.");
+      return;
+    }
+
     const formData = new FormData();
-    formData.append("file", file);
-    formData.append("user_id", localStorage.getItem("user_id") || "anonymous");
+    formData.append("file", file); // CSV file only
 
     try {
       setUploading(true);
 
-      const { data } = await mlApi.post("/predict", formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-        onUploadProgress: (e) => {
-          if (!e.total) return;
-          const percent = Math.round((e.loaded * 100) / e.total);
-          setProgress(percent);
-        },
-      });
+      const { data } = await mlApi.post(
+        `/predict?user_id=${encodeURIComponent(userId)}`,
+        formData,
+        {
+          headers: {
+            "Content-Type": "multipart/form-data",
+            Authorization: `Bearer ${token}`, // ← send JWT
+          },
+          withCredentials: false, // ← no cookies for JWT
+          onUploadProgress: (e) => {
+            if (!e.total) return;
+            const percent = Math.round((e.loaded * 100) / e.total);
+            setProgress(percent);
+          },
+        }
+      );
 
-      if (data?.status === "success") {
+      if (data?.success) {
         toast.success("File uploaded successfully!");
         navigate("/results");
       } else {
-        toast.error(data?.message || "Upload failed.");
+        toast.error(data?.error || "Upload failed.");
       }
     } catch (error) {
       console.error("Upload error:", error);
-      toast.error(error.response?.data?.message || "Upload failed.");
+      const msg =
+        error.response?.data?.error ||
+        error.response?.data?.message ||
+        error.message ||
+        "Upload failed.";
+      toast.error(msg);
     } finally {
       setUploading(false);
       setProgress(0);

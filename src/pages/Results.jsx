@@ -19,7 +19,7 @@ import {
 import { useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
 import Navbar from "../components/Navbar";
-import mlApi from "./lib/mlApi";
+import mlApi from "../lib/mlApi.js";
 
 const checklistItems = [
   "File must be in CSV format (.csv)",
@@ -38,22 +38,14 @@ const checklistItems = [
 - NumComplaints`,
 ];
 
-const COLORS = [
-  "#8884d8",
-  "#82ca9d",
-  "#ffc658",
-  "#ff7f50",
-  "#8dd1e1",
-  "#d0ed57",
-];
-
 function Results() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [checked, setChecked] = useState(
     new Array(checklistItems.length).fill(false)
   );
-  const allChecked = checked.every((item) => item === true);
+  const allChecked = checked.every(Boolean);
+  const navigate = useNavigate();
 
   const handleCheck = (index) => {
     const next = [...checked];
@@ -61,23 +53,33 @@ function Results() {
     setChecked(next);
   };
 
-  const navigate = useNavigate();
-
   useEffect(() => {
     const fetchLatestResults = async () => {
       setLoading(true);
       try {
+        const token = localStorage.getItem("token");
         const user_id = localStorage.getItem("user_id") || "anonymous";
-        const res = await mlApi.get("/results/latest", { params: { user_id } });
-        setData(res.data);
+        if (!token) throw new Error("Please log in first.");
+
+        const res = await mlApi.get(
+          `/results/latest?user_id=${encodeURIComponent(user_id)}`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+            withCredentials: false,
+          }
+        );
+
+        if (!res.data?.success)
+          throw new Error(res.data?.error || "Failed to load results");
+        setData(res.data.data); // server returns { success, data: { result_json } } in our template
       } catch (error) {
         console.error("Latest results error:", error);
-        const msg =
+        toast.error(
           error.response?.data?.error ||
-          error.response?.data?.message ||
-          error.message ||
-          "Failed to load results";
-        toast.error(msg);
+            error.response?.data?.message ||
+            error.message ||
+            "Failed to load results"
+        );
         setData(null);
       } finally {
         setLoading(false);
@@ -90,21 +92,20 @@ function Results() {
   const handleDownload = async () => {
     try {
       const user_id = localStorage.getItem("user_id") || "anonymous";
-      // Build a direct download URL from the mlApi baseURL
+      const token = localStorage.getItem("token");
       const url = `${
         mlApi.defaults.baseURL
       }/results/download?user_id=${encodeURIComponent(user_id)}`;
-      const response = await fetch(url, { method: "GET" });
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       if (!response.ok) throw new Error("Download failed");
 
       const blob = await response.blob();
       const dlUrl = window.URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = dlUrl;
-      link.setAttribute(
-        "download",
-        (data && data.csv_url) || "churn_results.csv"
-      );
+      link.setAttribute("download", "churn_results.csv");
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -121,6 +122,8 @@ function Results() {
   if (!data)
     return <p className="text-center mt-10 text-red-500">No results found</p>;
 
+  // If your backend's shape is different, adjust these mappings.
+  // Here we assume your API already builds pieData, tenureChart, etc.
   return (
     <>
       <Navbar />
@@ -175,83 +178,75 @@ function Results() {
             </ResponsiveContainer>
           </div>
 
-          <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Complaints Line Chart */}
-            <div className="bg-white rounded-2xl p-6 shadow">
-              <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
-                Complaints vs Churn
-              </h2>
-              <ResponsiveContainer width="100%" height={300}>
-                <LineChart data={data.complaintsLineChart}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="complaints" />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
-                  <Line
-                    type="monotone"
-                    dataKey="churned"
-                    stroke="#f43f5e"
-                    name="Churned"
-                    strokeWidth={2}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="retained"
-                    stroke="#fda4af"
-                    name="Retained"
-                    strokeWidth={2}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
+          {/* Complaints Line Chart */}
+          <div className="bg-white rounded-2xl p-6 shadow">
+            <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
+              Complaints vs Churn
+            </h2>
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={data.complaintsLineChart}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="complaints" />
+                <YAxis />
+                <Tooltip />
+                <Legend />
+                <Line
+                  type="monotone"
+                  dataKey="churned"
+                  stroke="#f43f5e"
+                  name="Churned"
+                  strokeWidth={2}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="retained"
+                  stroke="#fda4af"
+                  name="Retained"
+                  strokeWidth={2}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
 
-            {/* Balance Area Chart */}
-            <div className="bg-white rounded-2xl p-6 shadow">
-              <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
-                Balance vs Churn/Retain
-              </h2>
-              <ResponsiveContainer width="100%" height={300}>
-                <AreaChart
-                  data={data.balanceAreaChart}
-                  margin={{ top: 10, right: 30, left: 0, bottom: 0 }}
-                >
-                  <defs>
-                    <linearGradient
-                      id="colorRetain"
-                      x1="0"
-                      y1="0"
-                      x2="0"
-                      y2="1"
-                    >
-                      <stop offset="5%" stopColor="#fbcfe8" stopOpacity={0.8} />
-                      <stop offset="95%" stopColor="#fbcfe8" stopOpacity={0} />
-                    </linearGradient>
-                    <linearGradient id="colorChurn" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.8} />
-                      <stop offset="95%" stopColor="#f43f5e" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <XAxis dataKey="balance" tick={{ fontSize: 10 }} />
-                  <YAxis />
-                  <Tooltip />
-                  <Area
-                    type="monotone"
-                    dataKey="retained"
-                    stroke="#fbcfe8"
-                    fill="url(#colorRetain)"
-                    name="Retained"
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="churned"
-                    stroke="#f43f5e"
-                    fill="url(#colorChurn)"
-                    name="Churned"
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
+          {/* Balance Area Chart */}
+          <div className="bg-white rounded-2xl p-6 shadow">
+            <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
+              Balance vs Churn/Retain
+            </h2>
+            <ResponsiveContainer width="100%" height={300}>
+              <AreaChart
+                data={data.balanceAreaChart}
+                margin={{ top: 10, right: 30, left: 0, bottom: 0 }}
+              >
+                <defs>
+                  <linearGradient id="colorRetain" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#fbcfe8" stopOpacity={0.8} />
+                    <stop offset="95%" stopColor="#fbcfe8" stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="colorChurn" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.8} />
+                    <stop offset="95%" stopColor="#f43f5e" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="balance" tick={{ fontSize: 10 }} />
+                <YAxis />
+                <Tooltip />
+                <Area
+                  type="monotone"
+                  dataKey="retained"
+                  stroke="#fbcfe8"
+                  fill="url(#colorRetain)"
+                  name="Retained"
+                />
+                <Area
+                  type="monotone"
+                  dataKey="churned"
+                  stroke="#f43f5e"
+                  fill="url(#colorChurn)"
+                  name="Churned"
+                />
+              </AreaChart>
+            </ResponsiveContainer>
           </div>
 
           {/* Credit Score Trend */}
