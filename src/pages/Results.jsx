@@ -19,7 +19,7 @@ import {
 import { useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
 import Navbar from "../components/Navbar";
-import mlApi from "..src/lib/mlApi";
+import mlApi from "./lib/mlApi";
 
 const checklistItems = [
   "File must be in CSV format (.csv)",
