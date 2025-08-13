@@ -19,7 +19,7 @@ import {
 import { useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
 import Navbar from "../components/Navbar.jsx";
-import mlApi from "../lib/mlApi.js";
+import mlApi from "./lib/mlApi.js";
 
 const checklistItems = [
   "File must be in CSV format (.csv)",
@@ -53,27 +53,36 @@ function Results() {
     setChecked(next);
   };
 
+  // In dev, call /auth/login once so Flask sets the cookie
+  const ensureSession = async () => {
+    try {
+      if (import.meta.env.DEV) {
+        await mlApi.post("/auth/login");
+      }
+      return true;
+    } catch {
+      toast.error("Could not establish session.");
+      return false;
+    }
+  };
+
   useEffect(() => {
     const fetchLatestResults = async () => {
       setLoading(true);
       try {
-        const token = localStorage.getItem("token");
-        const user_id = localStorage.getItem("user_id") || "anonymous";
-        if (!token) throw new Error("Please log in first.");
+        if (!(await ensureSession())) return;
 
-        const res = await mlApi.get(
-          `/results/latest?user_id=${encodeURIComponent(user_id)}`,
-          {
-            headers: { Authorization: `Bearer ${token}` },
-            // withCredentials MUST remain false for Option A (JWT)
-          }
-        );
+        // Cookie-based: no token header, but we must send credentials
+        const res = await mlApi.get("/results/latest", {
+          withCredentials: true,
+        });
 
-        // Expecting: { success: true, data: { ...result_json... } }
         if (!res.data?.success)
           throw new Error(res.data?.error || "Failed to load results");
 
-        const payload = res.data.data || res.data.result_json || res.data; // be tolerant
+        // Expecting the server to return the prebuilt series like pieData, tenureChart, etc.
+        // If your server returns just { predictions: [...] }, see the note below.
+        const payload = res.data.data || res.data.result_json || res.data;
         setData(payload);
       } catch (error) {
         console.error("Latest results error:", error);
@@ -94,14 +103,10 @@ function Results() {
 
   const handleDownload = async () => {
     try {
-      const user_id = localStorage.getItem("user_id") || "anonymous";
-      const token = localStorage.getItem("token");
-      const url = `${
-        mlApi.defaults.baseURL
-      }/results/download?user_id=${encodeURIComponent(user_id)}`;
-      const response = await fetch(url, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      if (!(await ensureSession())) return;
+      // Only works if you implement /results/download on the API
+      const url = `${mlApi.defaults.baseURL}/results/download`;
+      const response = await fetch(url, { credentials: "include" });
       if (!response.ok) throw new Error("Download failed");
 
       const blob = await response.blob();
@@ -125,9 +130,6 @@ function Results() {
   if (!data)
     return <p className="text-center mt-10 text-red-500">No results found</p>;
 
-  // Your backend should provide these series: pieData, tenureChart, complaintsLineChart,
-  // balanceAreaChart, creditScoreChart, incomeBandChart, avgCreditScoreByChurn.
-  // Adjust the keys below if your server returns different names.
   return (
     <>
       <Navbar />

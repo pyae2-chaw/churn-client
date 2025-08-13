@@ -2,73 +2,59 @@ import React, { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
 import Navbar from "../components/Navbar.jsx";
-import mlApi from "../lib/mlApi.js";
+import mlApi from "./lib/mlApi.js";
 
-const MAX_SIZE_MB = 15; // keep in sync with server MAX_CONTENT_LENGTH
+const MAX_SIZE_MB = 15;
 
 function Upload() {
   const navigate = useNavigate();
-
   const [file, setFile] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const fileInputRef = useRef(null);
 
   const handleFileChange = (e) => {
-    const selectedFile = e.target.files?.[0];
-    if (!selectedFile) return;
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const isCsv = f.name.toLowerCase().endsWith(".csv");
+    const okSize = f.size <= MAX_SIZE_MB * 1024 * 1024;
+    if (!isCsv) return toast.error("Only CSV files are allowed.");
+    if (!okSize) return toast.error(`File too large. Max ${MAX_SIZE_MB} MB.`);
+    setFile(f);
+  };
 
-    // basic checks
-    const isCsv = selectedFile.name.toLowerCase().endsWith(".csv");
-    const isUnderLimit = selectedFile.size <= MAX_SIZE_MB * 1024 * 1024;
-
-    if (!isCsv) {
-      toast.error("Only CSV files are allowed.");
-      setFile(null);
-      return;
+  // For dev convenience: call /auth/login once to set cookie.
+  // In production, you'd normally already have a cookie from your real login flow.
+  const ensureSession = async () => {
+    try {
+      if (import.meta.env.DEV) {
+        await mlApi.post("/auth/login");
+      }
+      return true;
+    } catch {
+      toast.error("Could not establish session.");
+      return false;
     }
-    if (!isUnderLimit) {
-      toast.error(`File too large. Max ${MAX_SIZE_MB} MB.`);
-      setFile(null);
-      return;
-    }
-    setFile(selectedFile);
   };
 
   const handleUpload = async () => {
     if (!file || uploading) return;
+    if (!(await ensureSession())) return;
 
-    const token = localStorage.getItem("token"); // JWT from your login backend
-    const userId = localStorage.getItem("user_id") || "anonymous";
-    if (!token) {
-      toast.error("Please log in first.");
-      return;
-    }
-
-    const formData = new FormData();
-    formData.append("file", file);
+    const fd = new FormData();
+    fd.append("file", file);
 
     try {
       setUploading(true);
       setProgress(0);
 
-      const { data } = await mlApi.post(
-        `/predict?user_id=${encodeURIComponent(userId)}`,
-        formData,
-        {
-          headers: {
-            "Content-Type": "multipart/form-data",
-            Authorization: `Bearer ${token}`, // ✅ JWT header
-          },
-          withCredentials: false, // ✅ NO cookies for Option A
-          onUploadProgress: (e) => {
-            if (e.total) {
-              const pct = Math.round((e.loaded * 100) / e.total);
-              setProgress(pct);
-            }
-          },
-        }
-      );
+      const { data } = await mlApi.post(`/predict`, fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+        withCredentials: true, // critical for cookies
+        onUploadProgress: (e) => {
+          if (e.total) setProgress(Math.round((e.loaded * 100) / e.total));
+        },
+      });
 
       if (data?.success) {
         toast.success("File uploaded successfully!");
@@ -76,12 +62,12 @@ function Upload() {
       } else {
         toast.error(data?.error || "Upload failed.");
       }
-    } catch (error) {
-      console.error("Upload error:", error);
+    } catch (err) {
+      console.error("Upload error:", err);
       const msg =
-        error?.response?.data?.error ||
-        error?.response?.data?.message ||
-        error?.message ||
+        err.response?.data?.error ||
+        err.response?.data?.message ||
+        err.message ||
         "Upload failed.";
       toast.error(msg);
     } finally {
