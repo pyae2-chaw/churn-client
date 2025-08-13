@@ -4,6 +4,8 @@ import { toast } from "react-toastify";
 import Navbar from "../components/Navbar.jsx";
 import mlApi from "../lib/mlApi.js";
 
+const MAX_SIZE_MB = 15; // keep in sync with server MAX_CONTENT_LENGTH
+
 function Upload() {
   const navigate = useNavigate();
 
@@ -14,18 +16,29 @@ function Upload() {
 
   const handleFileChange = (e) => {
     const selectedFile = e.target.files?.[0];
-    if (selectedFile && selectedFile.name.toLowerCase().endsWith(".csv")) {
-      setFile(selectedFile);
-    } else {
+    if (!selectedFile) return;
+
+    // basic checks
+    const isCsv = selectedFile.name.toLowerCase().endsWith(".csv");
+    const isUnderLimit = selectedFile.size <= MAX_SIZE_MB * 1024 * 1024;
+
+    if (!isCsv) {
       toast.error("Only CSV files are allowed.");
       setFile(null);
+      return;
     }
+    if (!isUnderLimit) {
+      toast.error(`File too large. Max ${MAX_SIZE_MB} MB.`);
+      setFile(null);
+      return;
+    }
+    setFile(selectedFile);
   };
 
   const handleUpload = async () => {
-    if (!file) return;
+    if (!file || uploading) return;
 
-    const token = localStorage.getItem("token"); // JWT from your login
+    const token = localStorage.getItem("token"); // JWT from your login backend
     const userId = localStorage.getItem("user_id") || "anonymous";
     if (!token) {
       toast.error("Please log in first.");
@@ -33,10 +46,11 @@ function Upload() {
     }
 
     const formData = new FormData();
-    formData.append("file", file); // CSV file only
+    formData.append("file", file);
 
     try {
       setUploading(true);
+      setProgress(0);
 
       const { data } = await mlApi.post(
         `/predict?user_id=${encodeURIComponent(userId)}`,
@@ -44,13 +58,14 @@ function Upload() {
         {
           headers: {
             "Content-Type": "multipart/form-data",
-            Authorization: `Bearer ${token}`, // ← send JWT
+            Authorization: `Bearer ${token}`, // ✅ JWT header
           },
-          withCredentials: false, // ← no cookies for JWT
+          withCredentials: false, // ✅ NO cookies for Option A
           onUploadProgress: (e) => {
-            if (!e.total) return;
-            const percent = Math.round((e.loaded * 100) / e.total);
-            setProgress(percent);
+            if (e.total) {
+              const pct = Math.round((e.loaded * 100) / e.total);
+              setProgress(pct);
+            }
           },
         }
       );
@@ -64,9 +79,9 @@ function Upload() {
     } catch (error) {
       console.error("Upload error:", error);
       const msg =
-        error.response?.data?.error ||
-        error.response?.data?.message ||
-        error.message ||
+        error?.response?.data?.error ||
+        error?.response?.data?.message ||
+        error?.message ||
         "Upload failed.";
       toast.error(msg);
     } finally {

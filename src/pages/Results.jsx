@@ -65,13 +65,16 @@ function Results() {
           `/results/latest?user_id=${encodeURIComponent(user_id)}`,
           {
             headers: { Authorization: `Bearer ${token}` },
-            withCredentials: false,
+            // withCredentials MUST remain false for Option A (JWT)
           }
         );
 
+        // Expecting: { success: true, data: { ...result_json... } }
         if (!res.data?.success)
           throw new Error(res.data?.error || "Failed to load results");
-        setData(res.data.data); // server returns { success, data: { result_json } } in our template
+
+        const payload = res.data.data || res.data.result_json || res.data; // be tolerant
+        setData(payload);
       } catch (error) {
         console.error("Latest results error:", error);
         toast.error(
@@ -122,8 +125,9 @@ function Results() {
   if (!data)
     return <p className="text-center mt-10 text-red-500">No results found</p>;
 
-  // If your backend's shape is different, adjust these mappings.
-  // Here we assume your API already builds pieData, tenureChart, etc.
+  // Your backend should provide these series: pieData, tenureChart, complaintsLineChart,
+  // balanceAreaChart, creditScoreChart, incomeBandChart, avgCreditScoreByChurn.
+  // Adjust the keys below if your server returns different names.
   return (
     <>
       <Navbar />
@@ -133,7 +137,7 @@ function Results() {
         </h1>
 
         <div className="grid md:grid-cols-2 gap-6">
-          {/* Pie Chart */}
+          {/* Pie: Churn vs Retain */}
           <div className="bg-white rounded-2xl p-6 shadow flex flex-col items-center justify-center">
             <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
               Churn vs Retain
@@ -148,10 +152,10 @@ function Results() {
                   outerRadius={110}
                   label
                 >
-                  {data.pieData.map((entry, index) => (
+                  {data.pieData?.map((_, i) => (
                     <Cell
-                      key={`cell-${index}`}
-                      fill={["#fda4af", "#f43f5e"][index % 2]}
+                      key={`cell-${i}`}
+                      fill={["#fda4af", "#f43f5e"][i % 2]}
                     />
                   ))}
                 </Pie>
@@ -160,7 +164,7 @@ function Results() {
             </ResponsiveContainer>
           </div>
 
-          {/* Tenure Chart */}
+          {/* Tenure Bar */}
           <div className="bg-white rounded-2xl p-6 shadow">
             <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
               Customer Tenure vs Churn
@@ -178,7 +182,7 @@ function Results() {
             </ResponsiveContainer>
           </div>
 
-          {/* Complaints Line Chart */}
+          {/* Complaints Line */}
           <div className="bg-white rounded-2xl p-6 shadow">
             <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
               Complaints vs Churn
@@ -208,7 +212,7 @@ function Results() {
             </ResponsiveContainer>
           </div>
 
-          {/* Balance Area Chart */}
+          {/* Balance Area */}
           <div className="bg-white rounded-2xl p-6 shadow">
             <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
               Balance vs Churn/Retain
@@ -279,14 +283,14 @@ function Results() {
             </ResponsiveContainer>
           </div>
 
-          {/* Income Band Chart */}
+          {/* Income Band */}
           <div className="bg-white rounded-2xl p-6 shadow">
             <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
               Income Band vs Churn
             </h2>
             <ResponsiveContainer width="100%" height={300}>
               <BarChart
-                data={[...data.incomeBandChart].sort((a, b) => {
+                data={[...(data.incomeBandChart || [])].sort((a, b) => {
                   const order = [
                     "Very Low",
                     "Low",
@@ -320,7 +324,7 @@ function Results() {
                 <YAxis />
                 <Tooltip />
                 <Bar dataKey="avg_score">
-                  {data.avgCreditScoreByChurn.map((entry, index) => (
+                  {data.avgCreditScoreByChurn?.map((entry, index) => (
                     <Cell
                       key={`cell-${index}`}
                       fill={entry.label === "Retained" ? "#fda4af" : "#f43f5e"}
