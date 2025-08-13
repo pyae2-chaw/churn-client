@@ -18,7 +18,7 @@ import {
 } from "recharts";
 import { useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
-import Navbar from "../components/Navbar";
+import Navbar from "../components/Navbar.jsx";
 import mlApi from "../lib/mlApi.js";
 
 const checklistItems = [
