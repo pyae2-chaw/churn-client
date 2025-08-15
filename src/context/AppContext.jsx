@@ -1,12 +1,11 @@
 import axios from "axios";
 import { createContext, useEffect, useState } from "react";
 import { toast } from "react-toastify";
-import api from "../lib/api";
 
 export const AppContext = createContext();
 
 export const AppContextProvider = (props) => {
-  axios.defaults.withCredentials = false;
+  axios.defaults.withCredentials = true;
 
   const backendUrl = import.meta.env.VITE_BACKEND_URL;
   const mlApiUrl = import.meta.env.VITE_ML_API_URL;
@@ -16,7 +15,7 @@ export const AppContextProvider = (props) => {
 
   const getAuthState = async () => {
     try {
-      const { data } = await api.get("/api/auth/is-auth");
+      const { data } = await axios.get(backendUrl + "/api/auth/is-auth");
       if (data.success) {
         setIsLoggedin(true);
         getUserData();
@@ -28,7 +27,7 @@ export const AppContextProvider = (props) => {
 
   const getUserData = async () => {
     try {
-      const { data } = await api.get("/api/user/data");
+      const { data } = await axios.get(backendUrl + "/api/user/data");
       data.success ? setUserData(data.userData) : toast.error(data.message);
     } catch (error) {
       toast.error(error.message);
