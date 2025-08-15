@@ -7,8 +7,10 @@ export const AppContext = createContext();
 export const AppContextProvider = (props) => {
   axios.defaults.withCredentials = true;
 
-  const backendUrl = import.meta.env.VITE_BACKEND_URL || "";
-  const mlApiUrl = import.meta.env.VITE_ML_API_URL || "/ml";
+  const rawBackend = import.meta.env.VITE_BACKEND_URL;
+  const rawMl = import.meta.env.VITE_ML_API_URL;
+  const backendUrl = rawBackend && rawBackend !== '""' ? rawBackend : "";
+  const mlApiUrl = rawMl && rawMl !== '""' ? rawMl : "/ml";
 
   const [isLoggedin, setIsLoggedin] = useState(false);
   const [userData, setUserData] = useState(false);
