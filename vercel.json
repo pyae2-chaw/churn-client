@@ -1,0 +1,12 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://churn-server.onrender.com/api/:path*"
+    },
+    {
+      "source": "/ml/:path*",
+      "destination": "https://churn-ml-api.onrender.com/:path*"
+    }
+  ]
+}
