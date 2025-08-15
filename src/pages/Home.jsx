@@ -11,7 +11,6 @@ function Home() {
   // Checklist state
   const checklistItems = [
     "File must be in CSV format (.csv)",
-    "Maximum file size allowed: 15 MB",
     "Must contain at least 50 rows",
     "No empty rows or columns values",
     "All columns must contain valid, non-missing numeric values.",

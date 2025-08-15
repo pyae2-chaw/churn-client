@@ -18,10 +18,10 @@ import {
 } from "recharts";
 import { useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
-import Navbar from "../components/Navbar.jsx";
-import mlApi from "../lib/mlApi.js"; // <-- axios instance for ML API (no cookies)
+import axios from "axios";
+import Navbar from "../components/Navbar";
+import { AppContext } from "../context/AppContext";
 
-// Checklist items
 const checklistItems = [
   "File must be in CSV format (.csv)",
   "Must contains at least 50 rows",
@@ -39,79 +39,42 @@ const checklistItems = [
 - NumComplaints`,
 ];
 
-// Enrich payload: derive pie + numeric summary if only predictions are present
-function enrich(payload) {
-  if (!payload) return null;
-
-  const preds = Array.isArray(payload.predictions) ? payload.predictions : [];
-
-  const churned = preds.filter((p) => Number(p.churn_pred) === 1).length;
-  const total = preds.length;
-  const retained = total - churned;
-  const churnRate = total ? Number(((churned / total) * 100).toFixed(1)) : 0;
-
-  const pieData =
-    payload.pieData && Array.isArray(payload.pieData)
-      ? payload.pieData
-      : [
-          { name: "Retained", value: retained },
-          { name: "Churned", value: churned },
-        ];
-
-  return {
-    ...payload,
-    pieData,
-    summary: { total, churned, retained, churnRate },
-  };
-}
+const COLORS = [
+  "#8884d8",
+  "#82ca9d",
+  "#ffc658",
+  "#ff7f50",
+  "#8dd1e1",
+  "#d0ed57",
+];
 
 function Results() {
+  const { mlApiUrl } = React.useContext(AppContext);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [checked, setChecked] = useState(
     new Array(checklistItems.length).fill(false)
   );
-  const navigate = useNavigate();
-  const allChecked = checked.every(Boolean);
-
+  const allChecked = checked.every((item) => item === true);
   const handleCheck = (index) => {
-    const next = [...checked];
-    next[index] = !next[index];
-    setChecked(next);
+    const newChecked = [...checked];
+    newChecked[index] = !newChecked[index];
+    setChecked(newChecked);
   };
+  const user_id = localStorage.getItem("user_id") || "anonymous";
 
+  const navigate = useNavigate();
   useEffect(() => {
     const fetchLatestResults = async () => {
-      setLoading(true);
       try {
-        // No cookies to ML API in production
-        const res = await mlApi.get("/results/latest", {
-          withCredentials: false,
-        });
-
-        // API can be { success:true, data:{...} } OR { success:true, ... }
-        const payload = res.data?.data ?? res.data;
-        if (!res.data?.success || !payload) {
-          setData(null);
-        } else {
-          setData(enrich(payload));
-        }
-      } catch (err) {
-        const status = err?.response?.status;
-        if (status === 404) {
-          // No results yet
-          setData(null);
-        } else {
-          console.error("Latest results error:", err);
-          toast.error(
-            err?.response?.data?.error ||
-              err?.response?.data?.message ||
-              err?.message ||
-              "Failed to load results"
-          );
-          setData(null);
-        }
-      } finally {
+        const user_id = localStorage.getItem("user_id") || "anonymous";
+        const res = await axios.get(
+          `${mlApiUrl}/results/latest?user_id=${user_id}`
+        );
+        setData(res.data);
+        setLoading(false);
+      } catch (error) {
+        toast.error("Failed to load results");
         setLoading(false);
       }
     };
@@ -121,152 +84,121 @@ function Results() {
 
   const handleDownload = async () => {
     try {
-      // Works only if your ML API exposes /results/download
-      const url = `${mlApi.defaults.baseURL}/results/download`;
-      const response = await fetch(url, { credentials: "omit" }); // no cookies
-      if (!response.ok) throw new Error("Download failed");
+      const user_id = localStorage.getItem("user_id") || "anonymous";
+      const response = await axios.get(
+        `${mlApiUrl}/results/download?user_id=${user_id}`,
+        { responseType: "blob", withCredentials: true }
+      );
 
-      const blob = await response.blob();
-      const dlUrl = window.URL.createObjectURL(blob);
+      const blob = new Blob([response.data], { type: "text/csv" });
+      const url = window.URL.createObjectURL(blob);
+
       const link = document.createElement("a");
-      link.href = dlUrl;
-      link.setAttribute("download", "churn_results.csv");
+      link.href = url;
+      link.setAttribute("download", data.csv_url || "churn_results.csv");
       document.body.appendChild(link);
       link.click();
       link.remove();
-      window.URL.revokeObjectURL(dlUrl);
+
+      toast.success("CSV downloaded successfully!");
     } catch (error) {
+      toast.error("Download failed.");
       console.error("Download error:", error);
-      toast.error("Download failed (endpoint missing?).");
     }
   };
 
   if (loading) return <p className="text-center mt-10">Loading results...</p>;
-
-  // First-time after deploy or server restart (nothing predicted yet)
   if (!data)
-    return (
-      <>
-        <Navbar />
-        <div className="min-h-screen p-8 bg-gradient-to-br from-gray-100 to-pink-100">
-          <h1 className="text-3xl font-bold text-center text-rose-500 mb-6">
-            ML Prediction Results
-          </h1>
-          <p className="text-center mt-10 text-gray-700">
-            No results found yet. Please upload a CSV on the{" "}
-            <button
-              onClick={() => navigate("/upload")}
-              className="underline text-rose-500 hover:text-rose-600"
-            >
-              Upload
-            </button>{" "}
-            page and run a prediction.
-          </p>
-        </div>
-      </>
-    );
-
-  const { summary } = data;
+    return <p className="text-center mt-10 text-red-500">No results found</p>;
 
   return (
     <>
       <Navbar />
       <div className="min-h-screen p-8 bg-gradient-to-br from-gray-100 to-pink-100">
-        <h1 className="text-3xl font-bold text-center text-rose-500 mb-4">
+        <h1 className="text-3xl font-bold text-center text-rose-500 mb-6">
           ML Prediction Results
         </h1>
 
-        {/* Numeric summary */}
-        {summary && (
-          <div className="flex flex-wrap items-center justify-center gap-3 mb-6">
-            <div className="px-4 py-2 rounded-full bg-white shadow text-gray-700">
-              Total: <span className="font-semibold">{summary.total}</span>
-            </div>
-            <div className="px-4 py-2 rounded-full bg-white shadow text-rose-600">
-              Churned: <span className="font-semibold">{summary.churned}</span>
-            </div>
-            <div className="px-4 py-2 rounded-full bg-white shadow text-rose-400">
-              Retained:{" "}
-              <span className="font-semibold">{summary.retained}</span>
-            </div>
-            <div className="px-4 py-2 rounded-full bg-white shadow text-gray-700">
-              Churn rate:{" "}
-              <span className="font-semibold">{summary.churnRate}%</span>
-            </div>
-          </div>
-        )}
-
         <div className="grid md:grid-cols-2 gap-6">
-          {/* Pie: Churn vs Retain */}
-          {Array.isArray(data.pieData) && (
-            <div className="bg-white rounded-2xl p-6 shadow flex flex-col items-center justify-center">
-              <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
-                Churn vs Retain
-              </h2>
-              <ResponsiveContainer width={300} height={300}>
-                <PieChart>
-                  <Pie
-                    dataKey="value"
-                    data={data.pieData}
-                    cx="50%"
-                    cy="50%"
-                    outerRadius={110}
-                    label={({ name, value }) => `${name}: ${value}`}
-                  >
-                    {data.pieData.map((_, i) => (
-                      <Cell
-                        key={`cell-${i}`}
-                        fill={["#fda4af", "#f43f5e"][i % 2]}
-                      />
-                    ))}
-                  </Pie>
-                  <Tooltip formatter={(v) => [v, "Count"]} />
-                  <Legend />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-          )}
+          {/* Pie Chart */}
+          <div className="bg-white rounded-2xl p-6 shadow flex flex-col items-center justify-center">
+            <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
+              Churn vs Retain
+            </h2>
+            <ResponsiveContainer width={300} height={300}>
+              <PieChart>
+                <Pie
+                  dataKey="value"
+                  data={data.pieData}
+                  cx="50%"
+                  cy="50%"
+                  outerRadius={110}
+                  label
+                >
+                  {data.pieData.map((entry, index) => (
+                    <Cell
+                      key={`cell-${index}`}
+                      fill={["#fda4af", "#f43f5e"][index % 2]} // rose-500 and rose-300
+                    />
+                  ))}
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
 
-          {/* Tenure chart (render only if provided by API) */}
-          {Array.isArray(data.tenureChart) && (
+          {/* Tenure Chart */}
+          <div className="bg-white rounded-2xl p-6 shadow">
+            <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
+              Customer Tenure vs Churn
+            </h2>
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart data={data.tenureChart}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="tenure" />
+                <YAxis />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="churned" fill="#f43f5e" name="Churned" />{" "}
+                {/* rose-500 */}
+                <Bar dataKey="retained" fill="#fda4af" name="Retained" />{" "}
+                {/* rose-200 */}
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Complaints Line Chart */}
             <div className="bg-white rounded-2xl p-6 shadow">
               <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
-                Customer Tenure vs Churn
+                Complaints vs Churn
               </h2>
               <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={data.tenureChart}>
+                <LineChart data={data.complaintsLineChart}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="tenure" />
+                  <XAxis dataKey="complaints" />
                   <YAxis />
                   <Tooltip />
                   <Legend />
-                  <Bar dataKey="churned" fill="#f43f5e" name="Churned" />
-                  <Bar dataKey="retained" fill="#fda4af" name="Retained" />
-                </BarChart>
+                  <Line
+                    type="monotone"
+                    dataKey="churned"
+                    stroke="#f43f5e"
+                    name="Churned"
+                    strokeWidth={2}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="retained"
+                    stroke="#fda4af"
+                    name="Retained"
+                    strokeWidth={2}
+                  />
+                </LineChart>
               </ResponsiveContainer>
             </div>
-          )}
 
-          {/* Probability distribution (optional) */}
-          {Array.isArray(data.probabilityBins) && (
-            <div className="bg-white rounded-2xl p-6 shadow">
-              <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
-                Probability Distribution
-              </h2>
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={data.probabilityBins}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="bin" />
-                  <YAxis />
-                  <Tooltip />
-                  <Bar dataKey="count" fill="#f43f5e" name="Count" />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-
-          {/* Balance area (optional) */}
-          {Array.isArray(data.balanceAreaChart) && (
+            {/* Balance Area Chart */}
             <div className="bg-white rounded-2xl p-6 shadow">
               <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
                 Balance vs Churn/Retain
@@ -284,11 +216,13 @@ function Results() {
                       x2="0"
                       y2="1"
                     >
-                      <stop offset="5%" stopColor="#fbcfe8" stopOpacity={0.8} />
+                      <stop offset="5%" stopColor="#fbcfe8" stopOpacity={0.8} />{" "}
+                      {/* rose-200 */}
                       <stop offset="95%" stopColor="#fbcfe8" stopOpacity={0} />
                     </linearGradient>
                     <linearGradient id="colorChurn" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.8} />
+                      <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.8} />{" "}
+                      {/* rose-500 */}
                       <stop offset="95%" stopColor="#f43f5e" stopOpacity={0} />
                     </linearGradient>
                   </defs>
@@ -312,96 +246,89 @@ function Results() {
                 </AreaChart>
               </ResponsiveContainer>
             </div>
-          )}
+          </div>
 
-          {/* Credit score trend (optional) */}
-          {Array.isArray(data.creditScoreChart) && (
-            <div className="bg-white rounded-2xl p-6 shadow md:col-span-2">
-              <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
-                Credit Score Trends
-              </h2>
-              <ResponsiveContainer width="100%" height={300}>
-                <LineChart data={data.creditScoreChart}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="credit_score" />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
-                  <Line
-                    type="monotone"
-                    dataKey="churned"
-                    stroke="#f43f5e"
-                    name="Churned"
-                    strokeWidth={2}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="retained"
-                    stroke="#fda4af"
-                    name="Retained"
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          )}
+          {/* Credit Score Trend */}
+          <div className="bg-white rounded-2xl p-6 shadow md:col-span-2">
+            <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
+              Credit Score Trends
+            </h2>
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={data.creditScoreChart}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="credit_score" />
+                <YAxis />
+                <Tooltip />
+                <Legend />
+                <Line
+                  type="monotone"
+                  dataKey="churned"
+                  stroke="#f43f5e" // rose-500
+                  name="Churned"
+                  strokeWidth={2}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="retained"
+                  stroke="#fda4af" // slate-500
+                  name="Retained"
+                  strokeWidth={2}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
 
-          {/* Income band (optional) */}
-          {Array.isArray(data.incomeBandChart) && (
-            <div className="bg-white rounded-2xl p-6 shadow">
-              <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
-                Income Band vs Churn
-              </h2>
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart
-                  data={[...(data.incomeBandChart || [])].sort((a, b) => {
-                    const order = [
-                      "Very Low",
-                      "Low",
-                      "Medium",
-                      "High",
-                      "Very High",
-                    ];
-                    return order.indexOf(a.band) - order.indexOf(b.band);
-                  })}
-                >
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="band" />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
-                  <Bar dataKey="retained" fill="#fda4af" />
-                  <Bar dataKey="churned" fill="#f43f5e" />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
+          {/* Income Band Chart */}
+          <div className="bg-white rounded-2xl p-6 shadow">
+            <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
+              Income Band vs Churn
+            </h2>
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart
+                data={[...data.incomeBandChart].sort((a, b) => {
+                  const order = [
+                    "Very Low",
+                    "Low",
+                    "Medium",
+                    "High",
+                    "Very High",
+                  ];
+                  return order.indexOf(a.band) - order.indexOf(b.band);
+                })}
+              >
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="band" />
+                <YAxis />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="retained" fill="#fda4af" />
+                <Bar dataKey="churned" fill="#f43f5e" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
 
-          {/* Avg Credit Score (optional) */}
-          {Array.isArray(data.avgCreditScoreByChurn) && (
-            <div className="bg-white rounded-2xl p-6 shadow">
-              <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
-                Average Credit Score by Churn
-              </h2>
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={data.avgCreditScoreByChurn}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="label" />
-                  <YAxis />
-                  <Tooltip />
-                  <Bar dataKey="avg_score">
-                    {data.avgCreditScoreByChurn.map((entry, index) => (
-                      <Cell
-                        key={`cell-${index}`}
-                        fill={
-                          entry.label === "Retained" ? "#fda4af" : "#f43f5e"
-                        }
-                      />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
+          {/* Avg Credit Score */}
+          <div className="bg-white rounded-2xl p-6 shadow">
+            <h2 className="font-semibold text-lg mb-4 text-center text-rose-500">
+              Average Credit Score by Churn
+            </h2>
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart data={data.avgCreditScoreByChurn}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="label" />
+                <YAxis />
+                <Tooltip />
+                <Bar dataKey="avg_score">
+                  {data.avgCreditScoreByChurn.map((entry, index) => (
+                    <Cell
+                      key={`cell-${index}`}
+                      fill={entry.label === "Retained" ? "#fda4af" : "#f43f5e"}
+                    />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
         </div>
 
         {/* Checklist */}
